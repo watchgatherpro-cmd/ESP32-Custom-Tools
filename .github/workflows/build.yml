@@ -1,4 +1,4 @@
-name: Build Custom Firmware
+name: Build and Release Firmware
 
 on:
   push:
@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -37,8 +40,11 @@ jobs:
             0x8000 .pio/build/esp32-s3-devkitc-1/partitions.bin \
             0x10000 .pio/build/esp32-s3-devkitc-1/firmware.bin
 
-      - name: Upload Firmware
-        uses: actions/upload-artifact@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
         with:
-          name: custom-firmware
-          path: output/merged.bin
+          tag_name: v1.0.${{ github.run_number }}
+          name: Release v1.0.${{ github.run_number }}
+          files: output/merged.bin
+          draft: false
+          prerelease: false
